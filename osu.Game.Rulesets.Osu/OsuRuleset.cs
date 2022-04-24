@@ -196,7 +196,8 @@ namespace osu.Game.Rulesets.Osu
                         new OsuModMuted(),
                         new OsuModNoScope(),
                         new OsuModMagnetised(),
-                        new ModAdaptiveSpeed()
+                        new ModAdaptiveSpeed(),
+                        new OsuModNoStreams(),
                     };
 
                 case ModType.System:
