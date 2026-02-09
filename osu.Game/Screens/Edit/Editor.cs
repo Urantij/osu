@@ -21,6 +21,7 @@ using osu.Framework.Graphics.UserInterface;
 using osu.Framework.Input;
 using osu.Framework.Input.Bindings;
 using osu.Framework.Input.Events;
+using osu.Framework.Lists;
 using osu.Framework.Localisation;
 using osu.Framework.Logging;
 using osu.Framework.Screens;
@@ -1274,6 +1275,8 @@ namespace osu.Game.Screens.Edit
         {
             yield return createDifficultyCreationMenu();
             yield return createDifficultySwitchMenu();
+            // exclude if not a std?
+            yield return createApplySamplesFromMenu();
             yield return new OsuMenuItemSpacer();
             yield return new EditorMenuItem(EditorStrings.DeleteDifficulty, MenuItemType.Destructive, deleteDifficulty) { Action = { Disabled = Beatmap.Value.BeatmapSetInfo.Beatmaps.Count < 2 } };
             yield return new OsuMenuItemSpacer();
@@ -1534,6 +1537,171 @@ namespace osu.Game.Screens.Edit
         {
             switchingDifficulty = true;
             loader?.ScheduleSwitchToExistingDifficulty(nextBeatmap, GetState(nextBeatmap.Ruleset));
+        }
+
+        private EditorMenuItem createApplySamplesFromMenu()
+        {
+            var difficultyItems = new List<MenuItem>();
+
+            foreach (var rulesetBeatmaps in groupedOrderedBeatmaps)
+            {
+                if (difficultyItems.Count > 0)
+                    difficultyItems.Add(new OsuMenuItemSpacer());
+
+                foreach (var beatmap in rulesetBeatmaps)
+                {
+                    bool isCurrentDifficulty = playableBeatmap.BeatmapInfo.Equals(beatmap);
+                    if (isCurrentDifficulty)
+                        continue;
+
+                    // exclude non std?
+
+                    var difficultyMenuItem = new ApplySamplesMenuItem(beatmap, ApplySamplesFrom);
+                    difficultyItems.Add(difficultyMenuItem);
+                }
+            }
+
+            // Ensure difficulty names are updated when modified in the editor.
+            // Maybe we could trigger less often but this seems to work well enough.
+            editorBeatmap.SaveStateTriggered += () =>
+            {
+                foreach (var beatmapInfo in Beatmap.Value.BeatmapSetInfo.Beatmaps)
+                {
+                    var menuItem = difficultyItems.OfType<ApplySamplesMenuItem>().FirstOrDefault(i => i.BeatmapInfo.Equals(beatmapInfo));
+                    if (menuItem != null)
+                        menuItem.Text.Value = string.IsNullOrEmpty(beatmapInfo.DifficultyName) ? "(unnamed)" : beatmapInfo.DifficultyName;
+                }
+            };
+
+            return new EditorMenuItem(EditorStrings.ApplySamplesFrom) { Items = difficultyItems };
+        }
+
+        public void ApplySamplesFrom(BeatmapInfo beatmapInfo)
+        {
+            // compare of doubles is risky, slider's nested object time is computed and inaccurate
+            // there but a way already, could not find
+            // number is made up idk what i should use
+            const double tolerance = 0.00001;
+            bool isKindaSameDouble(double a, double b) => Math.Abs(a - b) < tolerance;
+            bool isKindaIncludedDouble(double target, double start, double end) => target >= start - tolerance && target <= end + tolerance;
+
+            // circle object if fits, otherwise exact hit object from slider (head, tick, repeat, tail)
+            HitObject findExactHitObject(double startTime)
+            {
+                HitObject same = editorBeatmap.HitObjects.FirstOrDefault(h => isKindaSameDouble(h.StartTime, startTime));
+
+                if (same != null)
+                {
+                    SlimReadOnlyListWrapper<HitObject> sameNested = same.NestedHitObjects;
+
+                    if (sameNested.Count == 0)
+                    {
+                        return same;
+                    }
+
+                    return sameNested.First();
+                }
+
+                same = editorBeatmap.HitObjects.FirstOrDefault(h => isKindaIncludedDouble(startTime, h.StartTime, h.GetEndTime()));
+
+                if (same == null)
+                    return null;
+
+                return same.NestedHitObjects.FirstOrDefault(target => target.StartTime == startTime);
+            }
+
+            void replaceSamples(HitObject target, HitObject source)
+            {
+                target.Samples = source.Samples.Select(s => s.With()).ToList();
+            }
+
+            WorkingBeatmap loadableBeatmap = beatmapManager.GetWorkingBeatmap(beatmapInfo);
+
+            IBeatmap loadedBeatmap;
+
+            try
+            {
+                loadedBeatmap = loadableBeatmap.GetPlayableBeatmap(loadableBeatmap.BeatmapInfo.Ruleset);
+            }
+            catch (Exception e)
+            {
+                Logger.Error(e, "Could not load beatmap successfully!");
+                // couldn't load, hard abort!
+                this.Exit();
+                return;
+            }
+
+            foreach (HitObject loadedHitObject in loadedBeatmap.HitObjects)
+            {
+                // no nested objects means its a circle (or a spinner). slider otherwise
+
+                // if its a single hs object, we need to find single sample to replace.
+                // best case its also a single hs object and we just do replacement
+                // otherwise its a nested object of a slider
+
+                SlimReadOnlyListWrapper<HitObject> loadedNested = loadedHitObject.NestedHitObjects;
+
+                if (loadedNested.Count == 0)
+                {
+                    HitObject same = editorBeatmap.HitObjects.FirstOrDefault(h => isKindaSameDouble(h.StartTime, loadedHitObject.StartTime));
+
+                    if (same != null)
+                    {
+                        SlimReadOnlyListWrapper<HitObject> sameNested = same.NestedHitObjects;
+
+                        // if its a single hs, we just copy.
+                        // if its a slider, iam actually not sure what to do. replace "default" sample or just a head?
+                        // i'll try to replace just a head
+
+                        if (sameNested.Count == 0)
+                        {
+                            replaceSamples(same, loadedHitObject);
+                        }
+                        else
+                        {
+                            replaceSamples(sameNested.First(), loadedHitObject);
+                        }
+                    }
+                    else
+                    {
+                        // we can search through nested objects from the start, but i kinda dont want to
+                        same = editorBeatmap.HitObjects.FirstOrDefault(h => isKindaIncludedDouble(loadedHitObject.StartTime, h.StartTime, h.GetEndTime()));
+
+                        if (same == null)
+                            continue;
+
+                        SlimReadOnlyListWrapper<HitObject> targetNested = same.NestedHitObjects;
+
+                        same = targetNested.FirstOrDefault(target => isKindaSameDouble(target.StartTime, loadedHitObject.StartTime));
+
+                        if (same == null)
+                            continue;
+
+                        replaceSamples(same, loadedHitObject);
+                    }
+                }
+                else
+                {
+                    // so this is a slider
+                    // we should consider "default" sample and nested objects (head, ticks, repeats, tail)
+
+                    // but i dont know how this "default" is working.
+                    // nested objects always have some sample during debug, so maybe editor automatically set "default"?
+
+                    foreach (HitObject nest in loadedNested)
+                    {
+                        // what if sample lands on a slider head? xd
+                        // i think copying samples from slider is a unintended thing i do this for fun
+                        // so i just replace exact samples here
+
+                        HitObject target = findExactHitObject(nest.StartTime);
+                        if (target == null)
+                            continue;
+
+                        replaceSamples(target, nest);
+                    }
+                }
+            }
         }
 
         private void cancelExit()

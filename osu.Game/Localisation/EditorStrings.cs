@@ -47,7 +47,8 @@ namespace osu.Game.Localisation
         /// <summary>
         /// "Move already placed objects when changing timing"
         /// </summary>
-        public static LocalisableString AdjustExistingObjectsOnTimingChanges => new TranslatableString(getKey(@"adjust_existing_objects_on_timing_changes"), @"Move already placed objects when changing timing");
+        public static LocalisableString AdjustExistingObjectsOnTimingChanges =>
+            new TranslatableString(getKey(@"adjust_existing_objects_on_timing_changes"), @"Move already placed objects when changing timing");
 
         /// <summary>
         /// "For editing (.olz)"
@@ -73,6 +74,11 @@ namespace osu.Game.Localisation
         /// "Change difficulty"
         /// </summary>
         public static LocalisableString ChangeDifficulty => new TranslatableString(getKey(@"change_difficulty"), @"Change difficulty");
+
+        /// <summary>
+        /// "Apply samples from"
+        /// </summary>
+        public static LocalisableString ApplySamplesFrom => new TranslatableString(getKey(@"apply_samples_from"), @"Apply samples from");
 
         /// <summary>
         /// "Delete difficulty"
