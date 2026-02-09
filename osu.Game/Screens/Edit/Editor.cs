@@ -1585,34 +1585,96 @@ namespace osu.Game.Screens.Edit
             bool isKindaSameDouble(double a, double b) => Math.Abs(a - b) < tolerance;
             bool isKindaIncludedDouble(double target, double start, double end) => target >= start - tolerance && target <= end + tolerance;
 
-            // circle object if fits, otherwise exact hit object from slider (head, tick, repeat, tail)
-            HitObject findExactHitObject(double startTime)
+            List<HitSampleInfo> cloneSamples(HitObject source) => source.Samples.Select(s => s.With()).ToList();
+
+            void replaceSamples(HitObject target, HitObject source)
             {
-                HitObject same = editorBeatmap.HitObjects.FirstOrDefault(h => isKindaSameDouble(h.StartTime, startTime));
+                target.Samples = cloneSamples(source);
+            }
+
+            // IList<HitSampleInfo> findSampleInfoList<T>(T repeats, double targetTime) where T : HitObject, IHasRepeats
+            IList<HitSampleInfo> findSampleInfoList(IHasRepeats repeats, double startTime, double targetTime)
+            {
+                if (isKindaSameDouble(startTime, targetTime))
+                    return repeats.NodeSamples[0];
+
+                if (isKindaSameDouble(repeats.EndTime, targetTime))
+                    return repeats.NodeSamples[^1];
+
+                if (repeats.RepeatCount == 0)
+                    return null;
+
+                double cycleDuration = repeats.Duration / (repeats.RepeatCount + 1);
+
+                double passed = repeats.EndTime - targetTime;
+
+                double times = passed / cycleDuration;
+
+                // if value is almost integer, its a node. otherwise its a tick or nothing at all
+
+                double roundTimes = Math.Round(times);
+
+                double diff = times - roundTimes;
+
+                if (diff > tolerance)
+                    return null;
+
+                return repeats.NodeSamples[(int)roundTimes];
+            }
+
+            void applyObjectSamplesToCurrentMap(HitObject loadedHitObject)
+            {
+                HitObject same = editorBeatmap.HitObjects.FirstOrDefault(h => isKindaSameDouble(h.StartTime, loadedHitObject.StartTime));
 
                 if (same != null)
                 {
                     SlimReadOnlyListWrapper<HitObject> sameNested = same.NestedHitObjects;
 
-                    if (sameNested.Count == 0)
+                    // if its a single hs, we just copy.
+                    // if its a slider, iam actually not sure what to do. replace "default" sample or just a head?
+                    // i'll try to replace just a head
+
+                    if (same is IHasRepeats sameRepeats)
                     {
-                        return same;
+                        IList<HitSampleInfo> sampleList = sameRepeats.NodeSamples[0];
+                        sampleList.Clear();
+                        sampleList.AddRange(cloneSamples(loadedHitObject));
                     }
 
-                    return sameNested.First();
+                    if (sameNested.Count == 0)
+                    {
+                        replaceSamples(same, loadedHitObject);
+                    }
+                    else
+                    {
+                        replaceSamples(sameNested.First(), loadedHitObject);
+                    }
                 }
+                else
+                {
+                    // we can search through nested objects from the start, but i kinda dont want to
+                    same = editorBeatmap.HitObjects.FirstOrDefault(h => isKindaIncludedDouble(loadedHitObject.StartTime, h.StartTime, h.GetEndTime()));
 
-                same = editorBeatmap.HitObjects.FirstOrDefault(h => isKindaIncludedDouble(startTime, h.StartTime, h.GetEndTime()));
+                    if (same == null)
+                        return;
 
-                if (same == null)
-                    return null;
+                    SlimReadOnlyListWrapper<HitObject> targetNested = same.NestedHitObjects;
 
-                return same.NestedHitObjects.FirstOrDefault(target => target.StartTime == startTime);
-            }
+                    var nestedObject = targetNested.FirstOrDefault(target => isKindaSameDouble(target.StartTime, loadedHitObject.StartTime));
 
-            void replaceSamples(HitObject target, HitObject source)
-            {
-                target.Samples = source.Samples.Select(s => s.With()).ToList();
+                    if (nestedObject == null)
+                        return;
+
+                    if (same is IHasRepeats sameRepeats)
+                    {
+                        IList<HitSampleInfo> sampleList = findSampleInfoList(sameRepeats, same.StartTime, loadedHitObject.StartTime);
+                        sampleList.Clear();
+                        sampleList.AddRange(cloneSamples(loadedHitObject));
+                    }
+
+                    // should not do if its tail?
+                    replaceSamples(nestedObject, loadedHitObject);
+                }
             }
 
             WorkingBeatmap loadableBeatmap = beatmapManager.GetWorkingBeatmap(beatmapInfo);
@@ -1643,42 +1705,7 @@ namespace osu.Game.Screens.Edit
 
                 if (loadedNested.Count == 0)
                 {
-                    HitObject same = editorBeatmap.HitObjects.FirstOrDefault(h => isKindaSameDouble(h.StartTime, loadedHitObject.StartTime));
-
-                    if (same != null)
-                    {
-                        SlimReadOnlyListWrapper<HitObject> sameNested = same.NestedHitObjects;
-
-                        // if its a single hs, we just copy.
-                        // if its a slider, iam actually not sure what to do. replace "default" sample or just a head?
-                        // i'll try to replace just a head
-
-                        if (sameNested.Count == 0)
-                        {
-                            replaceSamples(same, loadedHitObject);
-                        }
-                        else
-                        {
-                            replaceSamples(sameNested.First(), loadedHitObject);
-                        }
-                    }
-                    else
-                    {
-                        // we can search through nested objects from the start, but i kinda dont want to
-                        same = editorBeatmap.HitObjects.FirstOrDefault(h => isKindaIncludedDouble(loadedHitObject.StartTime, h.StartTime, h.GetEndTime()));
-
-                        if (same == null)
-                            continue;
-
-                        SlimReadOnlyListWrapper<HitObject> targetNested = same.NestedHitObjects;
-
-                        same = targetNested.FirstOrDefault(target => isKindaSameDouble(target.StartTime, loadedHitObject.StartTime));
-
-                        if (same == null)
-                            continue;
-
-                        replaceSamples(same, loadedHitObject);
-                    }
+                    applyObjectSamplesToCurrentMap(loadedHitObject);
                 }
                 else
                 {
@@ -1694,11 +1721,7 @@ namespace osu.Game.Screens.Edit
                         // i think copying samples from slider is a unintended thing i do this for fun
                         // so i just replace exact samples here
 
-                        HitObject target = findExactHitObject(nest.StartTime);
-                        if (target == null)
-                            continue;
-
-                        replaceSamples(target, nest);
+                        applyObjectSamplesToCurrentMap(nest);
                     }
                 }
             }
